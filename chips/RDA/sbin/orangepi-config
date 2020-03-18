@@ -1,0 +1,559 @@
+#!/bin/bash
+# ----------------------------------------------------------------------
+# OrangePi Configure
+# Maintainer: Buddy <buddy.zhang@aliyun.com>
+#
+# Copyright (C) 2017 OrangePi 
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License version 2 as
+# published by the Free Software Foundation.
+
+TITLE=OrangePi
+
+# OrangePi 2G-IOT and I96
+is_RDA() {
+  if grep -q "^Revision\s*:\s*0000$" /proc/cpuinfo; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+calc_wt_size() {
+  WT_HEIGHT=17
+  WT_WIDTH=$(tput cols)
+
+  if [ -z "$WT_WIDTH" ] || [ "$WT_WIDTH" -lt 60 ]; then
+    WT_WIDTH=80
+  fi
+  if [ "$WT_WIDTH" -gt 178 ]; then
+    WT_WIDTH=120
+  fi
+  WT_MENU_HEIGHT=$(($WT_HEIGHT-7))
+}
+
+do_finish() {
+  clear
+  exit 0
+}
+
+do_RDA_wifi() {
+  local _WIFI_AP
+  local _WIFI_PSD
+  local _CONFIG_FILE=/etc/network/interfaces
+
+  _WIFI_AP=$(whiptail --title "${TITLE}" \
+    --inputbox "Please input AP name" 10 60 \
+    3>&1 1>&2 2>&3)
+
+  _WIFI_PSD=$(whiptail --title "${TITLE}" \
+    --inputbox "Please input AP password" 10 60 \
+    3>&1 1>&2 2>&3)
+
+  # Create wifi configure
+  cat > "${_CONFIG_FILE}" <<EOF
+# interfaces(5) file used by ifup(8) and ifdown(8)
+# Include files from /etc/network/interfaces.d:
+# source-directory /etc/network/interfaces.d
+
+auto wlan0
+iface wlan0 inet dhcp
+wpa-ssid ${_WIFI_AP}
+wpa-psk ${_WIFI_PSD}
+EOF
+
+  whiptail --title "${TITLE}" \
+    --msgbox "Successful! Please reboot system!" 10 60
+}
+
+do_wifi_scan() {
+  iw wlan0 scan > .tmp
+  whiptail --textbox --scrolltext .tmp $WT_HEIGHT $WT_WIDTH
+  rm .tmp
+}
+
+do_connect_wifi() {
+  if is_RDA; then
+    do_RDA_wifi
+  else
+    echo 0
+  fi
+}
+
+do_wifi_info() {
+  iw wlan0 info > .tmp
+  whiptail --textbox --scrolltext .tmp $WT_HEIGHT $WT_WIDTH
+  rm .tmp
+}
+
+do_wifi_menu() {
+  OPTION=$(whiptail --title "${TITLE}" \
+    --menu " " $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Exit --ok-button Select \
+    "1 Scanning wifi" "Scanning all valid wifi and display all"\
+    "2 Connect wifi" "Connect to a new wifi" \
+    "3 More infomation" "Display more wifi information" \
+    3>&1 1>&2 2>&3)
+
+  exitstatus=$?
+  if [ $exitstatus -eq 1 ]; then
+    return 0
+  elif [ $exitstatus -eq 0 ]; then
+    case "$OPTION" in 
+      1\ *) do_wifi_scan ;;
+      2\ *) do_connect_wifi ;;
+      3\ *) do_wifi_info ;;
+      *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
+    esac || whiptail --msgbox "There was an error running option $OPTION" 20 60 1
+  fi
+}
+
+# Audio Play on RDA
+do_RDA_audio_play() {
+  amixer cset numid=9,iface=MIXER,name='Stop' 1 > /dev/null 2>&1
+  amixer cset numid=2,iface=MIXER,name='InChannelNumber' 1 > /dev/null 2>&1
+  amixer cset numid=2,iface=MIXER,name='InSampleRate' 8000 > /dev/null 2>&1
+  amixer cset numid=2,iface=MIXER,name='Capture Volume' 2 > /dev/null 2>&1
+  amixer cset numid=1,iface=MIXER,name='Playback Volume' 7 > /dev/null 2>&1
+  amixer cset numid=10,iface=MIXER,name='OutSampleRate' 44100 > /dev/null 2>&1
+  amixer cset numid=11,iface=MIXER,name='OutChannelNumber' 2 > /dev/null 2>&1
+  amixer cset numid=6,iface=MIXER,name='CodecAppMode' 0 > /dev/null 2>&1
+  amixer cset numid=7,iface=MIXER,name='StartPlay' 1 > /dev/null 2>&1
+  amixer cset numid=3,iface=MIXER,name='ITF' $1 > /dev/null 2>&1
+  amixer cset numid=4,iface=MIXER,name='SpkSel' > /dev/null 2>&1
+  amixer cset numid=5,iface=MIXER,name='ForceMainMic' 0 > /dev/null 2>&1
+  amixer cset numid=15,iface=MIXER,name='Commit Setup' 0 > /dev/null 2>&1
+}
+
+# Audio Record on RDA
+do_RDA_audio_record() {
+  amixer cset numid=9,iface=MIXER,name='Stop' 1 > /dev/null 2>&1
+  amixer cset numid=2,iface=MIXER,name='Capture Volume' 2 > /dev/null 2>&1
+  amixer cset numid=3,iface=MIXER,name='ITF' $1 > /dev/null 2>&1
+  amixer cset numid=5,iface=MIXER,name='ForceMainMic' 1 > /dev/null 2>&1
+  amixer cset numid=6,iface=MIXER,name='CodecAppMode' 0 > /dev/null 2>&1
+  amixer cset numid=12,iface=MIXER,name='InSampleRate' 16000 > /dev/null 2>&1
+  amixer cset numid=13,iface=MIXER,name='InChannelNumber' 1 > /dev/null 2>&1
+  amixer cset numid=8,iface=MIXER,name='StartRecord' 1 > /dev/null 2>&1
+}
+
+_main_play=1
+_main_record=1
+
+do_play_configure() {
+  OPTION=$(whiptail --title "${TITLE}" \
+    --menu " " $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Exit --ok-button Select \
+    "1 Main Speaker"  "Play with Main Speaker" \
+    "2 Headset"  "Play with Headset" \
+      3>&1 1>&2 2>&3)
+  
+  exitstatus=$?
+  if [ ${exitstatus} -eq 1 ]; then
+    return 0
+  elif [ ${exitstatus} -eq 0 ]; then
+    case "$OPTION" in
+      1\ *) _main_play="2" ;;
+      2\ *) _main_play="1" ;;
+      *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
+    esac || whiptail --msgbox "There was an error running option $OPTION" 20 60 1
+  fi
+}
+
+do_record_configure() {
+  OPTION=$(whiptail --title "${TITLE}" \
+    --menu " " $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Exit --ok-button Select \
+    "1 Main MIC"  "Record with Main MIC" \
+    "2 Headset"  "Record with Headset" \
+      3>&1 1>&2 2>&3)
+  
+  exitstatus=$?
+  if [ ${exitstatus} -eq 1 ]; then
+    return 0
+  elif [ ${exitstatus} -eq 0 ]; then
+    case "$OPTION" in
+      1\ *) _main_record="2" ;;
+      2\ *) _main_record="1" ;;
+      *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
+    esac || whiptail --msgbox "There was an error running option $OPTION" 20 60 1
+  fi
+}
+
+do_testing_play_audio() 
+{
+  TESTING_AUDIO=/usr/local/sbin/TestAudio.wav
+  if is_RDA; then
+    do_RDA_audio_play $1
+    aplay ${TESTING_AUDIO} > /dev/null 2>&1
+  else
+    echo 0
+  fi
+}
+
+do_audio_testing() {
+  OPTION=$(whiptail --title "${TITLE}" \
+      --menu " " $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Exit --ok-button Select \
+      "1 Testing Main Speaker"  "Playing audio with Main Speaker" \
+      "2 Testing Headset" "Playing audio with Headset"\
+      3>&1 1>&2 2>&3)
+  
+  exitstatus=$?
+  if [ ${exitstatus} -eq 1 ]; then
+    return 0
+  elif [ ${exitstatus} -eq 0 ]; then
+    case "$OPTION" in
+      1\ *) do_testing_play_audio "2" ;;
+      2\ *) do_testing_play_audio "1" ;;
+      *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
+    esac || whiptail --msgbox "There was an error running option $OPTION" 20 60 1
+  fi
+}
+
+do_play_audio() {
+  _audio_path=$(whiptail --title "${TITLE}" \
+    --inputbox "Please input audio path" 10 60 \
+    3>&1 1>&2 2>&3)
+  
+  if [ ! -f $_audio_path ]; then
+    whiptail --msgbox "Invalid path $_audio_path" 20 60 1
+    return 0
+  fi
+  if is_RDA; then  
+    do_RDA_audio_play ${_main_play}
+  fi
+  aplay ${_audio_path} > /dev/null 2>&1
+}
+
+do_record_audio() {
+  _audio_path=$(whiptail --title "${TITLE}" \
+    --inputbox "Please input audio path" 10 60 \
+    3>&1 1>&2 2>&3)
+  
+  if is_RDA; then  
+    do_RDA_audio_record ${_main_play}
+  fi
+  arecord -t wav -d 5 -f cd ${_audio_path} > /dev/null 2>&1
+  return 0
+}
+
+# Audio Setting 
+do_audio_menu()
+{
+  OPTION=$(whiptail --title "${TITLE}" \
+    --menu " " $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Exit --ok-button Select \
+    "1 Player Option" "Configure Main speaker or headset to play audio" \
+    "2 Record Option" "Configure Main MIC or headset to record audio"\
+    "3 Testing Option" "Test audio hardware"\
+    "4 Play audio" "Play wav audio stream" \
+    "5 Record audio" "Record audio to wav file" \
+    3>&1 1>&2 2>&3)
+
+  exitstatus=$?
+  if [ ${exitstatus} -eq 1 ]; then
+    return 0
+  elif [ ${exitstatus} -eq 0 ]; then
+    case "$OPTION" in
+      1\ *) do_play_configure ;;
+      2\ *) do_record_configure ;;
+      3\ *) do_audio_testing ;;
+      4\ *) do_play_audio ;;
+      5\ *) do_record_audio ;;
+      *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
+    esac || whiptail --msgbox "There was an error running option $OPTION" 20 60 1
+  fi
+}
+
+do_gpio_map() {
+  clear
+  gpio readall
+  exit
+}
+
+do_set_gpio_mode() {
+  _gpio_num=$(whiptail --title "${TITLE}" \
+    --inputbox "Please input gpio number on WiringPi" 10 60 \
+    3>&1 1>&2 2>&3)
+  
+  _gpio_direction=$(whiptail --title "${TITLE}" \
+    --inputbox "Please input gpio direction in/out" 10 60 \
+    3>&1 1>&2 2>&3)
+
+  gpio mode $_gpio_num $_gpio_direction
+  whiptail --msgbox "Succeed to set $_gpio_num mode $_gpio_direction" 20 60 1
+  return 0
+}
+
+do_set_gpio_value() {
+  _gpio_num=$(whiptail --title "${TITLE}" \
+    --inputbox "Please input gpio number on WiringPi" 10 60 \
+    3>&1 1>&2 2>&3)
+  
+  _gpio_value=$(whiptail --title "${TITLE}" \
+    --inputbox "Please input gpio value 1/0" 10 60 \
+    3>&1 1>&2 2>&3)
+
+  gpio mode $_gpio_num out
+  gpio write $_gpio_num $_gpio_value
+  whiptail --msgbox "Succeed to set $_gpio_num value $_gpio_value" 20 60 1
+  return 0
+}
+
+do_get_gpio_value() {
+  _gpio_num=$(whiptail --title "${TITLE}" \
+    --inputbox "Please input gpio number on WiringPi" 10 60 \
+    3>&1 1>&2 2>&3)
+  
+  gpio mode $_gpio_num in
+  _gpio_value=$(gpio read $_gpio_num)
+  whiptail --msgbox "GPIO $_gpio_num value $_gpio_value" 20 60 1
+  return 0
+}
+
+
+do_gpio_menu()
+{
+  OPTION=$(whiptail --title "${TITLE}" \
+    --menu " " $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Exit --ok-button Select \
+    "1 GPIO Map" "display gpio map with WiringPi" \
+    "2 Configure GPIO mode" "Configure gpio as output or input"\
+    "3 Setting GPIO value" "Set gpio value on output mode"\
+    "4 Getting GPIO value" "Get gpio value on input mode" \
+    3>&1 1>&2 2>&3)
+
+  exitstatus=$?
+  if [ ${exitstatus} -eq 1 ]; then
+    return 0
+  elif [ ${exitstatus} -eq 0 ]; then
+    case "$OPTION" in
+      1\ *) do_gpio_map ;;
+      2\ *) do_set_gpio_mode ;;
+      3\ *) do_set_gpio_value ;;
+      4\ *) do_get_gpio_value ;;
+      *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
+    esac || whiptail --msgbox "There was an error running option $OPTION" 20 60 1
+  fi
+}
+
+do_ssh() {
+  if [ -e /var/log/regen_ssh_keys.log ] && ! grep -q "^finished" /var/log/regen_ssh_keys.log; then
+    whiptail --msgbox "Initial ssh key generation still running. Please wait and try again." 20 60 2
+    return 1
+  fi
+  DEFAULT=--defaultno
+  if [ $(get_ssh) -eq 0 ]; then
+    DEFAULT=
+  fi
+  whiptail --yesno "Would you like the SSH server to be enabled?" $DEFAULT 20 60 2
+  RET=$?
+
+  if [ $RET -eq 0 ]; then
+    update-rc.d ssh enable > /dev/null 2>&1
+    invoke-rc.d start > /dev/null 2>&1
+    STATUS=enabled
+  elif [ $RET -eq 1 ]; then
+    update-rc.d ssh disable > /dev/null 2>&1
+    invoke-rc.d ssh stop > /dev/null 2>&1
+    STATUS=disabled
+  else
+    return $RET
+  fi
+  whiptail --msgbox "The SSH server is $STATUS" 20 60 1
+}
+
+do_hostname() {
+  whiptail --msgbox "\
+Please note: RFCs mandate that a hostname's labels \
+may contain only the ASCII letters 'a' through 'z' (case-insensitive), 
+the digits '0' through '9', and the hyphen.
+Hostname labels cannot begin or end with a hyphen. 
+No other symbols, punctuation characters, or blank spaces are permitted.\
+" 20 70 1
+  CURRENT_HOSTNAME=`cat /etc/hostname | tr -d " \t\n\r"`
+  NEW_HOSTNAME=$(whiptail --inputbox "Please enter a hostname" 20 60 "$CURRENT_HOSTNAME" 3>&1 1>&2 2>&3)
+  if [ $? -eq 0 ]; then
+    echo $NEW_HOSTNAME > /etc/hostname
+    sed -i "s/127.0.1.1.*$CURRENT_HOSTNAME/127.0.1.1\t$NEW_HOSTNAME/g" /etc/hosts
+    ASK_TO_REBOOT=1
+  fi
+}
+
+do_advance_menu()
+{
+  OPTION=$(whiptail --title "${TITLE}" \
+    --menu " " $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Exit --ok-button Select \
+    "1 SSH" "Enable/Disable remote command line access to OrangePi using SSH" \
+    "2 Hostname" "Set the visible name for this Pi on a network"\
+    3>&1 1>&2 2>&3)
+
+  exitstatus=$?
+  if [ ${exitstatus} -eq 1 ]; then
+    return 0
+  elif [ ${exitstatus} -eq 0 ]; then
+    case "$OPTION" in
+      1\ *) do_ssh ;;
+      2\ *) do_hostname ;;
+      *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
+    esac || whiptail --msgbox "There was an error running option $OPTION" 20 60 1
+  fi
+}
+
+do_enable_camera() {
+  return 0
+}
+
+do_install_camera() {
+  whiptail --yesno "Do you have plug GC2035 camera?" $DEFAULT 20 60 2
+  RET=$?
+
+  if [ $RET -eq 0 ]; then
+    whiptail --msgbox "After finish, you can use 'sudo OrangePi_Camera' to capture a picture"  20 60 1
+    . /usr/local/sbin/OrangePi_2G_IOT_Camera.sh
+    return 0
+  else
+    whiptail --msgbox "Please plug GC2035 first"  20 60 1
+    return 1
+  fi
+}
+
+do_get_camera_code() {
+LINK=https://raw.githubusercontent.com/OrangePiLibra/OrangePiRDA_external/master/CameraTest/CameraTest.c
+# Install camera test applicattion
+  whiptail --msgbox "Download newest file on /home/orangepi/OrangePi_Camera_DEMO.c, you can use 'sudo OrangePi_Camera' to capture a picture" 20 60 1
+  curl -o /home/orangepi/OrangePi_Camera_DEMO.c ${LINK} > /dev/null 2>&1
+  # compile
+  gcc /home/orangepi/OrangePi_Camera_DEMO.c -ljpeg -o /usr/local/bin/OrangePi_Camera
+  return 0
+}
+
+do_capture() {
+  whiptail --yesno "Do you have plug GC2035 camera?" $DEFAULT 20 60 2
+  RET=$?
+
+  if [ $RET -eq 0 ]; then
+    whiptail --msgbox "Picture will store on /home/orangepi/test_picture3.jpg" 20 60 2 
+    OrangePi_Camera
+    return 0
+  else
+    whiptail --msgbox "Please plug GC2035 first"  20 60 1
+    return 1
+  fi
+}
+
+do_camera_info() {
+  whiptail --msgbox "Now! OrangePi 2G-IOT support Capture picture etc.  If you want to use camera, you can use command 'sud OrangePi_Camera', then the picture will store in /home/orangepi/" 20 60 1
+}
+
+do_camera_menu()
+{
+  OPTION=$(whiptail --title "${TITLE}" \
+    --menu " " $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Exit --ok-button Select \
+    "1 Enable/Disable Camera" "Enable or Disable Video" \
+    "2 Install Camera driver" "Install GC2035 and Camera capture tools"\
+    "3 Get Camera Demo Code" "Get newest Camera usage demo code"\
+    "4 Capture a picture" "Capture a piture from video" \
+    "5 Usage of Camera" "More useful information about Camera" \
+    3>&1 1>&2 2>&3)
+
+  exitstatus=$?
+  if [ ${exitstatus} -eq 1 ]; then
+    return 0
+  elif [ ${exitstatus} -eq 0 ]; then
+    case "$OPTION" in
+      1\ *) do_enable_camera ;;
+      2\ *) do_install_camera ;;
+      3\ *) do_get_camera_code ;;
+      4\ *) do_capture ;;
+      5\ *) do_camera_info ;;
+      *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
+    esac
+  fi
+}
+
+do_ppp() {
+  wvdial Tom &
+  exit
+}
+
+do_SMS() {
+  OrangePi_GSM
+  exit
+}
+
+do_get_GSM_code() {
+LINK=https://raw.githubusercontent.com/OrangePiLibra/OrangePiRDA_external/master/2G/OrangePi_2G_IOT_GSM_Demo.c
+# Install camera test applicattion
+  whiptail --msgbox "Download newest file on /home/orangepi/OrangePi_GSM_DEMO.c, you can use 'sudo OrangePi_GSM' to capture a picture" 20 60 1
+  curl -o /home/orangepi/OrangePi_GSM_DEMO.c ${LINK} > /dev/null 2>&1
+  # compile
+  gcc /home/orangepi/OrangePi_GSM_DEMO.c -ljpeg -o /usr/local/bin/OrangePi_Camera
+  return 0
+}
+
+do_call() {
+  OrangePi_GSM
+  exit
+}
+
+do_GSM_usage() {
+  whiptail --msgbox "Now! OrangePi 2G-IOT support PPP,SMS and call phone.  If you want to connect via ppp, you can use command 'wvdial Tom &' --- If you want to Send Message via GSM, you can use command 'sudo OrangePi_GSM' --- If you want to call phone via GSM, you can use command 'sudo OrangePi_GSM'  -- more information please access: http://www.orangepi.org/orangepibbsen/forum.php?mod=viewthread&tid=2831&extra=page%3D1" 20 60 1
+}
+
+do_gsm_menu()
+{
+  OPTION=$(whiptail --title "${TITLE}" \
+    --menu " " $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Exit --ok-button Select \
+    "1 PPOE" "Connect network with ppp" \
+    "2 SMS" "Send message via GSM"\
+    "3 Get GSM Demo Code" "Get newest GSM usage demo code"\
+    "4 Call Phone" "Call phone via GSM" \
+    "5 Usage of GSM" "Introduce how to use GSM" \
+    3>&1 1>&2 2>&3)
+
+  exitstatus=$?
+  if [ ${exitstatus} -eq 1 ]; then
+    return 0
+  elif [ ${exitstatus} -eq 0 ]; then
+    case "$OPTION" in
+      1\ *) do_ppp ;;
+      2\ *) do_SMS ;;
+      3\ *) do_get_GSM_code ;;
+      4\ *) do_call ;;
+      5\ *) do_GSM_usage ;;
+      *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
+    esac
+  fi
+}
+
+SLOOP=1
+while [ ${SLOOP} = "1" ]
+do 
+  calc_wt_size
+  # Main Menu
+  OPTION=$(whiptail --title "${TITLE}" \
+    --menu " " $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Exit --ok-button Select \
+    "1 Wifi Settings" "Configure and Connect a new wifi, etc"\
+    "2 Audio Settings" "Configure play and speaker for audio"\
+    "3 Camera Settings" "Configure Camera to capture pic or video"\
+    "4 GPIO Settings" "Configure GPIO with WiringPi"\
+    "5 Storage Settings" "Expand rootfs or get memory infomation"\
+    "6 GSM service" "General user configure"\
+    "7 Advanced Settings" "Configure basic system item"\
+    3>&1 1>&2 2>&3)
+
+  exitstatus=$?
+  if [ $exitstatus -eq 1 ]; then
+    do_finish
+  elif [ $exitstatus -eq 0 ]; then
+    case "$OPTION" in
+      1\ *) do_wifi_menu ;;
+      2\ *) do_audio_menu ;;
+      3\ *) do_camera_menu ;;
+      4\ *) do_gpio_menu ;;
+      5\ *) echo 0 ;;
+      6\ *) do_gsm_menu ;;
+      7\ *) do_advance_menu ;;
+      *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
+    esac || whiptail --msgbox "There was an error running option $OPTION" 20 60 1
+  else
+    exit 1
+  fi
+done
